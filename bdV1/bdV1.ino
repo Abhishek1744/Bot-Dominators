@@ -53,25 +53,31 @@ void loop() {
   Serial.println(valueS5);
   
   // Line following logic
-  if (valueS3 == HIGH && valueS4 == HIGH || valueS3 == HIGH || valueS2 == HIGH && valueS4 == HIGH) {
-    // Center sensor is on the line
-    moveForward();
-  } else if (valueS3 == HIGH && valueS2 == HIGH || valueS2 == HIGH) {
-    // Slightly left of center
-    turnslightLeft();
-  } else if (valueS4 == HIGH && valueS5 == HIGH || valueS4 == HIGH) {
-    // Slightly right of center
-    turnslightRight();
-  } else if (valueS2 == HIGH && valueS3 == HIGH && valueS4 == HIGH && valueS1 == HIGH || valueS1 == HIGH && valueS2 == HIGH && valueS3 == HIGH || valueS1 == HIGH) {
-    // Far left
-    turnsharpLeft();
-  } else if (valueS5 == HIGH && valueS4 == HIGH && valueS3 == HIGH && valueS2 == HIGH || valueS5 == HIGH && valueS4 == HIGH && valueS3 == HIGH || valueS5 == HIGH) {
-    // Far right
-    turnsharpRight();
-  } else {
-    // All sensors are off the line
-    stopMotors();
+  if (valueS3 == HIGH && valueS4 == HIGH) {
+      // Centered on the line
+      moveForward();
+  } 
+  else if (valueS2 == HIGH && valueS3 == HIGH) {
+      // Slightly left of center
+      turnslightLeft();
+  } 
+  else if (valueS4 == HIGH && valueS5 == HIGH) {
+      // Slightly right of center
+      turnslightRight();
+  } 
+  else if (valueS1 == HIGH || (valueS1 == HIGH && valueS2 == HIGH && valueS3 == HIGH)) {
+      // Far left
+      turnsharpLeft();
+  } 
+  else if (valueS5 == HIGH || (valueS5 == HIGH && valueS4 == HIGH && valueS3 == HIGH)) {
+      // Far right
+      turnsharpRight();
+  } 
+  else {
+      // No line detected
+      stopMotors();
   }
+
 }
 
 // Function to move forward
