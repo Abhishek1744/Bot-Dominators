@@ -73,10 +73,7 @@ void loop() {
       // Far right
       turnsharpRight();
   } 
-  else {
-      // No line detected
-      stopMotors();
-  }
+
 
 }
 
