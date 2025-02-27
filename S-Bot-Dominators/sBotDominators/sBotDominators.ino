@@ -28,8 +28,8 @@ int SENSOR_WEIGHTS[NUM_SENSORS] = {-100, -70, -40, -15, 15, 40, 70, 100};
 // Motor speed constants - Adjusted for higher performance
 const int BASE_SPEED = 80;          // Baseline speed (increased)
 const int NORMAL_SPEED = 160;        // Speed for straight lines
-const int SLIGHT_TURN_SPEED = 120;   // Speed for slight turns (reduced)
-const int SHARP_TURN_SPEED = 80;     // Speed for sharp turns (reduced)
+const int SLIGHT_TURN_SPEED = 100;   // Speed for slight turns (reduced)
+const int SHARP_TURN_SPEED = 60;     // Speed for sharp turns (reduced)
 const int EXTREME_TURN_SPEED = 0;    // Complete stop of inner wheel for extreme turns
 const int MAX_SPEED = 255;
 const int MIN_SPEED = 0;
@@ -80,101 +80,115 @@ bool inSharpTurn = false;
 unsigned long sharpTurnStartTime = 0;
 const unsigned long MIN_SHARP_TURN_DURATION = 150;  // ms
 
-void setup() {
-  // Set appropriate pin modes
-  for (int i = 0; i < NUM_SENSORS; i++) {
-    pinMode(sensorPins[i], INPUT);
-  }
-  
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
-  
-  // Set initial motor state - ensure robot is stopped
-  analogWrite(ENA, 0);
-  analogWrite(ENB, 0);
-  
-  // Begin serial communication for debugging
-  Serial.begin(115200);  // Increased baud rate for better debugging
-  Serial.println("High Performance Line Follower Initialized");
-  
-  // Configure PID based on selected response mode
-  configureResponseProfile(RESPONSE_MODE);
-  
-  // Brief pause before starting
-  delay(1000);
-}
+// Global flag to determine if sensor readings need inversion
+// (ensuring that the "line" is always interpreted as active, i.e. 1)
+bool invertSensorReadings = false;
 
-// Configure robot behavior based on selected response profile
-void configureResponseProfile(int mode) {
-  switch(mode) {
-    case 1:  // Smooth following - good for gradual curves
-      KP = 0.65;
-      KI = 0.01;
-      KD = 0.3;
-      break;
-    case 2:  // Responsive - balanced for most tracks
-      KP = 0.85;
-      KI = 0.02;
-      KD = 0.5;
-      break;
-    case 3:  // Aggressive - for tracks with sharp turns
-      KP = 1.1;
-      KI = 0.02;
-      KD = 0.7;
-      break;
+// Calibration routine using only the outer sensors at startup.
+// Assumes that when the robot starts on the line, the outer sensors (indices 0, 1, 6, 7)
+// are over the background.
+void calibrateSensors() {
+  Serial.println("Calibrating using outer sensors. Ensure outer sensors are over background.");
+  const int numReadings = 100;
+  unsigned long sum = 0;
+  int sensorIndices[] = {0, 1, NUM_SENSORS - 2, NUM_SENSORS - 1};  // indices 0, 1, 6, 7
+  int numOuterSensors = sizeof(sensorIndices) / sizeof(sensorIndices[0]);
+  
+  for (int j = 0; j < numReadings; j++) {
+    for (int k = 0; k < numOuterSensors; k++) {
+      int i = sensorIndices[k];
+      sum += digitalRead(sensorPins[i]);
+    }
+    delay(10);
+  }
+  float average = sum / float(numReadings * numOuterSensors);
+  Serial.print("Calibration average of outer sensors: ");
+  Serial.println(average);
+  
+  // If the average is high, the background is white.
+  // For a white background, a reflective sensor returns HIGH (1),
+  // and since the robot is meant to run on a black line on white background,
+  // we need to invert the readings (so that the black line, which normally gives 0, becomes 1).
+  if (average > 0.5) {
+    invertSensorReadings = true;
+    Serial.println("Detected white background. Configuring for a black line on white background.");
+  } else {
+    invertSensorReadings = false;
+    Serial.println("Detected black background. Configuring for a white line on black background.");
   }
 }
 
+// Dynamically update line type during operation.
+// Reads raw values from the outer sensors and adjusts the inversion flag.
+void dynamicUpdateLineType() {
+  int sensorIndices[] = {0, 1, NUM_SENSORS - 2, NUM_SENSORS - 1};  // Outer sensors
+  const int numOuterSensors = sizeof(sensorIndices) / sizeof(sensorIndices[0]);
+  int sum = 0;
+  for (int i = 0; i < numOuterSensors; i++) {
+    sum += digitalRead(sensorPins[sensorIndices[i]]);
+  }
+  float average = sum / float(numOuterSensors);
+  // For a white background, raw reading is HIGH (1).
+  bool newInvert = (average > 0.5);
+  if (newInvert != invertSensorReadings) {
+    invertSensorReadings = newInvert;
+    Serial.print("Dynamic line type update: ");
+    if (invertSensorReadings) {
+      Serial.println("White background detected. Adjusting for black line on white background.");
+    } else {
+      Serial.println("Black background detected. Adjusting for white line on black background.");
+    }
+  }
+}
+
+// Sensor reading functions (applying inversion if needed)
 int readSensorsQuick() {
   int sensorByte = 0;
-  
-  // Fast digital reading - prioritizes speed
   for (int i = 0; i < NUM_SENSORS; i++) {
-    sensorValues[i] = digitalRead(sensorPins[i]);
+    int val = digitalRead(sensorPins[i]);
+    if (invertSensorReadings) {
+      val = !val;
+    }
+    sensorValues[i] = val;
     bitWrite(sensorByte, i, sensorValues[i]);
   }
-  
   return sensorByte;
 }
 
 int readSensorsMultiSample() {
   int sensorByte = 0;
-  
-  // Take 3 samples and use majority vote
   for (int i = 0; i < NUM_SENSORS; i++) {
     int votes = digitalRead(sensorPins[i]);
     delayMicroseconds(100);
     votes += digitalRead(sensorPins[i]);
     delayMicroseconds(100);
     votes += digitalRead(sensorPins[i]);
-    
-    sensorValues[i] = (votes >= 2) ? 1 : 0;
+    int value = (votes >= 2) ? 1 : 0;
+    if (invertSensorReadings) {
+      value = !value;
+    }
+    sensorValues[i] = value;
     bitWrite(sensorByte, i, sensorValues[i]);
   }
-  
   return sensorByte;
 }
 
 int readSensorsAnalog() {
   int sensorByte = 0;
-  
-  // Analog reading with threshold
   for (int i = 0; i < NUM_SENSORS; i++) {
     int reading = analogRead(sensorPins[i]);
-    sensorValues[i] = (reading < 500) ? 1 : 0;  // Adjust threshold as needed
+    int value = (reading < 500) ? 1 : 0;  // Adjust threshold as needed
+    if (invertSensorReadings) {
+      value = !value;
+    }
+    sensorValues[i] = value;
     bitWrite(sensorByte, i, sensorValues[i]);
   }
-  
   return sensorByte;
 }
 
 int readSensorArray() {
-  // Choose reading method based on configuration
-  switch(SENSOR_READ_MODE) {
+  switch (SENSOR_READ_MODE) {
     case 1: return readSensorsQuick();
     case 2: return readSensorsMultiSample();
     case 3: return readSensorsAnalog();
@@ -209,10 +223,8 @@ void recordPattern(int pattern) {
 // Check if a specific pattern was seen recently
 bool wasPatternRecentlySeen(int pattern) {
   unsigned long currentTime = millis();
-  
   for (int i = 0; i < 5; i++) {
-    if (patternValues[i] == pattern && 
-        (currentTime - lastPatterns[i]) < PATTERN_MEMORY_DURATION) {
+    if (patternValues[i] == pattern && (currentTime - lastPatterns[i]) < PATTERN_MEMORY_DURATION) {
       return true;
     }
   }
@@ -231,7 +243,6 @@ void setMotors(int leftSpeed, int rightSpeed, const char* state) {
   digitalWrite(IN2, leftSpeed >= 0 ? HIGH : LOW);
   analogWrite(ENA, abs(leftSpeed));
   
-  // Log state if debugging is enabled
   Serial.print("State: ");
   Serial.print(state);
   Serial.print(" L: ");
@@ -242,16 +253,13 @@ void setMotors(int leftSpeed, int rightSpeed, const char* state) {
 
 // Emergency stop - rapidly halts the robot
 void emergencyBrake() {
-  // Cut power but maintain active braking
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, HIGH);
   digitalWrite(IN3, HIGH);
   digitalWrite(IN4, HIGH);
   analogWrite(ENA, 255);
   analogWrite(ENB, 255);
-  delay(50);  // Brief brake period
-  
-  // Then release to idle
+  delay(50);
   analogWrite(ENA, 0);
   analogWrite(ENB, 0);
 }
@@ -261,26 +269,20 @@ float calculateAdvancedPID() {
   float position = calculatePosition();
   float error = position;
   
-  // Update error history for derivatives
   errorHistory[historyIndex] = error;
   historyIndex = (historyIndex + 1) % 5;
   
-  // Calculate primary derivative (rate of change)
   errorDerivative = error - lastError;
   
-  // Calculate secondary derivative (acceleration of error)
   int prevIndex = (historyIndex + 4) % 5;
   int prevPrevIndex = (historyIndex + 3) % 5;
   secondDerivative = (errorHistory[prevIndex] - errorHistory[prevPrevIndex]) - errorDerivative;
   
-  // Update integral with anti-windup
   integral = integral * 0.75 + error;
   integral = constrain(integral, -5000, 5000);
   
-  // Calculate base PID output
   float output = (KP * error) + (KI * integral) + (KD * errorDerivative);
   
-  // Add predictive component if enabled
   if (PREDICTIVE_TURNING) {
     output += secondDerivative * PREDICTIVE_TURN_FACTOR;
   }
@@ -289,34 +291,29 @@ float calculateAdvancedPID() {
   return output;
 }
 
-// Updated Ultra-sharp turn handler with edge sensor override.
-// Now sensor on digital pin 2 (index 0) is the rightmost sensor and sensor on digital pin 9 (index 7) is the leftmost.
+// Ultra-sharp turn handler with edge sensor override.
+// Sensor on digital pin 2 (index 0) is the rightmost sensor; sensor on pin 9 (index 7) is the leftmost.
 void handleUltraSharpTurn(int sensorByte, int &leftSpeed, int &rightSpeed) {
-  // Check rightmost sensor (sensor index 0, digital pin 2)
   if (bitRead(sensorByte, 0)) {
-    // Right edge sensor triggered: reverse right motor
     leftSpeed = NORMAL_SPEED + EXTREME_OUTER_BOOST;
     rightSpeed = -SHARP_TURN_SPEED / 2;
     inSharpTurn = true;
     sharpTurnStartTime = millis();
-    lastDirection = 2;  // right turn
+    lastDirection = 2;
     directionConfidence = DIRECTION_HYSTERESIS + 2;
     return;
   }
   
-  // Check leftmost sensor (sensor index NUM_SENSORS-1, digital pin 9)
   if (bitRead(sensorByte, NUM_SENSORS - 1)) {
-    // Left edge sensor triggered: reverse left motor
     leftSpeed = -SHARP_TURN_SPEED / 2;
     rightSpeed = NORMAL_SPEED + EXTREME_OUTER_BOOST;
     inSharpTurn = true;
     sharpTurnStartTime = millis();
-    lastDirection = 1;  // left turn
+    lastDirection = 1;
     directionConfidence = DIRECTION_HYSTERESIS + 2;
     return;
   }
   
-  // Otherwise, use original extreme turn detection logic:
   bool extremeLeftTurn = (sensorByte & B11000000) != 0 && (sensorByte & B00111111) == 0;
   bool extremeRightTurn = (sensorByte & B00000011) != 0 && (sensorByte & B11111100) == 0;
   
@@ -331,7 +328,7 @@ void handleUltraSharpTurn(int sensorByte, int &leftSpeed, int &rightSpeed) {
     } else {
       leftSpeed = EXTREME_TURN_SPEED;
       rightSpeed = NORMAL_SPEED + OUTER_WHEEL_BOOST;
-      inSharpTurn = true; 
+      inSharpTurn = true;
       sharpTurnStartTime = millis();
       lastDirection = 1;
       directionConfidence = DIRECTION_HYSTERESIS + 1;
@@ -361,13 +358,10 @@ void handleAdvancedTurn(int sensorByte) {
   int leftSpeed = 0;
   int rightSpeed = 0;
   
-  // Record this pattern for history tracking
   recordPattern(sensorByte);
   
-  // Check line timeout first
   if (sensorByte == NO_LINE) {
     if (millis() - lastLineTime > LINE_TIMEOUT) {
-      // Invoke intelligent line recovery if no line is detected
       unsigned long searchStartTime = millis();
       int searchDirection = lastDirection;
       if (searchDirection == 0) {
@@ -402,20 +396,17 @@ void handleAdvancedTurn(int sensorByte) {
     lastLineTime = millis();
   }
   
-  // Handle intersection detection
   if (sensorByte == ALL_LINE) {
     setMotors(NORMAL_SPEED, NORMAL_SPEED, "Intersection");
     return;
   }
   
-  // Check for ultra-sharp turns (this now handles edge sensors)
   handleUltraSharpTurn(sensorByte, leftSpeed, rightSpeed);
   if (leftSpeed != 0 || rightSpeed != 0) {
     setMotors(leftSpeed, rightSpeed, "Ultra Sharp Turn");
     return;
   }
   
-  // If we're in a sharp turn, maintain it for the minimum duration
   if (inSharpTurn && (millis() - sharpTurnStartTime < MIN_SHARP_TURN_DURATION)) {
     if (lastDirection == 1) {
       setMotors(SHARP_TURN_SPEED, NORMAL_SPEED + OUTER_WHEEL_BOOST, "Maintain Left Turn");
@@ -427,7 +418,6 @@ void handleAdvancedTurn(int sensorByte) {
     inSharpTurn = false;
   }
   
-  // Calculate sensor distribution for progressive turn patterns
   bool leftBias = false;
   bool rightBias = false;
   int leftCount = 0;
@@ -444,7 +434,6 @@ void handleAdvancedTurn(int sensorByte) {
   leftBias = (leftCount > rightCount + 1);
   rightBias = (rightCount > leftCount + 1);
   
-  // Apply hysteresis to avoid oscillation
   if (ENABLE_HYSTERESIS) {
     if (leftBias) {
       if (lastDirection == 2) {
@@ -479,7 +468,6 @@ void handleAdvancedTurn(int sensorByte) {
     }
   }
   
-  // Use PID control if no ultra-sharp turn is detected
   float adjustment = calculateAdvancedPID();
   
   if (abs(adjustment) > SHARP_TURN_THRESHOLD) {
@@ -503,10 +491,64 @@ void handleAdvancedTurn(int sensorByte) {
   previousSensorPattern = sensorByte;
 }
 
+void configureResponseProfile(int mode) {
+  switch(mode) {
+    case 1:
+      KP = 0.65;
+      KI = 0.01;
+      KD = 0.3;
+      break;
+    case 2:
+      KP = 0.85;
+      KI = 0.02;
+      KD = 0.5;
+      break;
+    case 3:
+      KP = 1.1;
+      KI = 0.02;
+      KD = 0.7;
+      break;
+  }
+}
+
+void setup() {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    pinMode(sensorPins[i], INPUT);
+  }
+  
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+  
+  Serial.begin(115200);
+  Serial.println("High Performance Line Follower Initializing...");
+  
+  // Initial calibration using outer sensors.
+  calibrateSensors();
+  
+  configureResponseProfile(RESPONSE_MODE);
+  
+  delay(1000);
+}
+
 void loop() {
   unsigned long cycleStartTime = micros();
   
+  // Read the sensor array (which updates sensorValues)
   int sensorByte = readSensorArray();
+  // Compute the current line position.
+  float pos = calculatePosition();
+  // Only update dynamic line type if the robot is roughly centered (on a straight line).
+  if (abs(pos) < 10) { // threshold value can be adjusted
+    dynamicUpdateLineType();
+  }
+  
   handleAdvancedTurn(sensorByte);
   
   unsigned long cycleTime = micros() - cycleStartTime;
