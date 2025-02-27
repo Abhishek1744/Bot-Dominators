@@ -12,24 +12,22 @@ const int IN4 = A1;
 
 // Robot performance profile - Critical settings for overall behavior
 #define PROCESSING_FREQUENCY 200  // Hz (200 = 5ms cycle time)
-#define RESPONSE_MODE 2           // 1=Smooth, 2=Responsive, 3=Aggressive
 #define PREDICTIVE_TURNING true   // Enable/disable turn prediction
 #define ENABLE_HYSTERESIS true    // Enable/disable turn hysteresis
-#define SENSOR_READ_MODE 1        // 1=Fast digital, 2=Multi-sample digital, 3=Analog with threshold
 
-// PID Constants - Tuned for specific response profiles
-float KP = 0.85;  // Higher value for more aggressive response
-float KI = 0.02;  // Small integral for eliminating steady-state error
-float KD = 0.5;   // High derivative for anticipating turns
+// PID Constants
+float KP = 0.85;  // Proportional gain
+float KI = 0.02;  // Integral gain for eliminating steady-state error
+float KD = 0.5;   // Derivative gain for anticipating turns
 
 // Dynamic weight array for weighted average calculations - outer sensors have higher weights
 int SENSOR_WEIGHTS[NUM_SENSORS] = {-100, -70, -40, -15, 15, 40, 70, 100};
 
-// Motor speed constants - Adjusted for higher performance
-const int BASE_SPEED = 80;          // Baseline speed (increased)
+// Motor speed constants
+const int BASE_SPEED = 80;          // Baseline speed
 const int NORMAL_SPEED = 160;        // Speed for straight lines
-const int SLIGHT_TURN_SPEED = 100;   // Speed for slight turns (reduced)
-const int SHARP_TURN_SPEED = 60;     // Speed for sharp turns (reduced)
+const int SLIGHT_TURN_SPEED = 100;   // Speed for slight turns
+const int SHARP_TURN_SPEED = 60;     // Speed for sharp turns
 const int EXTREME_TURN_SPEED = 0;    // Complete stop of inner wheel for extreme turns
 const int MAX_SPEED = 255;
 const int MIN_SPEED = 0;
@@ -81,12 +79,9 @@ unsigned long sharpTurnStartTime = 0;
 const unsigned long MIN_SHARP_TURN_DURATION = 150;  // ms
 
 // Global flag to determine if sensor readings need inversion
-// (ensuring that the "line" is always interpreted as active, i.e. 1)
 bool invertSensorReadings = false;
 
-// Calibration routine using only the outer sensors at startup.
-// Assumes that when the robot starts on the line, the outer sensors (indices 0, 1, 6, 7)
-// are over the background.
+// Calibration routine using only the outer sensors at startup
 void calibrateSensors() {
   Serial.println("Calibrating using outer sensors. Ensure outer sensors are over background.");
   const int numReadings = 100;
@@ -105,10 +100,6 @@ void calibrateSensors() {
   Serial.print("Calibration average of outer sensors: ");
   Serial.println(average);
   
-  // If the average is high, the background is white.
-  // For a white background, a reflective sensor returns HIGH (1),
-  // and since the robot is meant to run on a black line on white background,
-  // we need to invert the readings (so that the black line, which normally gives 0, becomes 1).
   if (average > 0.5) {
     invertSensorReadings = true;
     Serial.println("Detected white background. Configuring for a black line on white background.");
@@ -118,8 +109,7 @@ void calibrateSensors() {
   }
 }
 
-// Dynamically update line type during operation.
-// Reads raw values from the outer sensors and adjusts the inversion flag.
+// Dynamically update line type during operation
 void dynamicUpdateLineType() {
   int sensorIndices[] = {0, 1, NUM_SENSORS - 2, NUM_SENSORS - 1};  // Outer sensors
   const int numOuterSensors = sizeof(sensorIndices) / sizeof(sensorIndices[0]);
@@ -128,7 +118,6 @@ void dynamicUpdateLineType() {
     sum += digitalRead(sensorPins[sensorIndices[i]]);
   }
   float average = sum / float(numOuterSensors);
-  // For a white background, raw reading is HIGH (1).
   bool newInvert = (average > 0.5);
   if (newInvert != invertSensorReadings) {
     invertSensorReadings = newInvert;
@@ -141,8 +130,8 @@ void dynamicUpdateLineType() {
   }
 }
 
-// Sensor reading functions (applying inversion if needed)
-int readSensorsQuick() {
+// Simplified sensor reading function
+int readSensors() {
   int sensorByte = 0;
   for (int i = 0; i < NUM_SENSORS; i++) {
     int val = digitalRead(sensorPins[i]);
@@ -153,47 +142,6 @@ int readSensorsQuick() {
     bitWrite(sensorByte, i, sensorValues[i]);
   }
   return sensorByte;
-}
-
-int readSensorsMultiSample() {
-  int sensorByte = 0;
-  for (int i = 0; i < NUM_SENSORS; i++) {
-    int votes = digitalRead(sensorPins[i]);
-    delayMicroseconds(100);
-    votes += digitalRead(sensorPins[i]);
-    delayMicroseconds(100);
-    votes += digitalRead(sensorPins[i]);
-    int value = (votes >= 2) ? 1 : 0;
-    if (invertSensorReadings) {
-      value = !value;
-    }
-    sensorValues[i] = value;
-    bitWrite(sensorByte, i, sensorValues[i]);
-  }
-  return sensorByte;
-}
-
-int readSensorsAnalog() {
-  int sensorByte = 0;
-  for (int i = 0; i < NUM_SENSORS; i++) {
-    int reading = analogRead(sensorPins[i]);
-    int value = (reading < 500) ? 1 : 0;  // Adjust threshold as needed
-    if (invertSensorReadings) {
-      value = !value;
-    }
-    sensorValues[i] = value;
-    bitWrite(sensorByte, i, sensorValues[i]);
-  }
-  return sensorByte;
-}
-
-int readSensorArray() {
-  switch (SENSOR_READ_MODE) {
-    case 1: return readSensorsQuick();
-    case 2: return readSensorsMultiSample();
-    case 3: return readSensorsAnalog();
-    default: return readSensorsQuick();
-  }
 }
 
 // Enhanced position calculation using weighted sensors
@@ -281,7 +229,6 @@ float calculateAdvancedPID() {
   integral = integral * 0.75 + error;
   integral = constrain(integral, -5000, 5000);
   
-  //git check
   float output = (KP * error) + (KI * integral) + (KD * errorDerivative);
   
   if (PREDICTIVE_TURNING) {
@@ -292,8 +239,7 @@ float calculateAdvancedPID() {
   return output;
 }
 
-// Ultra-sharp turn handler with edge sensor override.
-// Sensor on digital pin 2 (index 0) is the rightmost sensor; sensor on pin 9 (index 7) is the leftmost.
+// Ultra-sharp turn handler with edge sensor override
 void handleUltraSharpTurn(int sensorByte, int &leftSpeed, int &rightSpeed) {
   if (bitRead(sensorByte, 0)) {
     leftSpeed = NORMAL_SPEED + EXTREME_OUTER_BOOST;
@@ -375,7 +321,7 @@ void handleAdvancedTurn(int sensorByte) {
       if (searchDirection == 1) {
         while (millis() - searchStartTime < 300) {
           setMotors(-SHARP_TURN_SPEED, NORMAL_SPEED, "Left Recovery");
-          if (readSensorArray() != NO_LINE) return;
+          if (readSensors() != NO_LINE) return;
           delay(5);
         }
         setMotors(0, 0, "Pausing");
@@ -384,7 +330,7 @@ void handleAdvancedTurn(int sensorByte) {
       } else {
         while (millis() - searchStartTime < 300) {
           setMotors(NORMAL_SPEED, -SHARP_TURN_SPEED, "Right Recovery");
-          if (readSensorArray() != NO_LINE) return;
+          if (readSensors() != NO_LINE) return;
           delay(5);
         }
         setMotors(0, 0, "Pausing");
@@ -492,26 +438,6 @@ void handleAdvancedTurn(int sensorByte) {
   previousSensorPattern = sensorByte;
 }
 
-void configureResponseProfile(int mode) {
-  switch(mode) {
-    case 1:
-      KP = 0.65;
-      KI = 0.01;
-      KD = 0.3;
-      break;
-    case 2:
-      KP = 0.85;
-      KI = 0.02;
-      KD = 0.5;
-      break;
-    case 3:
-      KP = 1.1;
-      KI = 0.02;
-      KD = 0.7;
-      break;
-  }
-}
-
 void setup() {
   for (int i = 0; i < NUM_SENSORS; i++) {
     pinMode(sensorPins[i], INPUT);
@@ -530,10 +456,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println("High Performance Line Follower Initializing...");
   
-  // Initial calibration using outer sensors.
+  // Initial calibration using outer sensors
   calibrateSensors();
-  
-  configureResponseProfile(RESPONSE_MODE);
   
   delay(1000);
 }
@@ -542,11 +466,13 @@ void loop() {
   unsigned long cycleStartTime = micros();
   
   // Read the sensor array (which updates sensorValues)
-  int sensorByte = readSensorArray();
-  // Compute the current line position.
+  int sensorByte = readSensors();
+  
+  // Compute the current line position
   float pos = calculatePosition();
-  // Only update dynamic line type if the robot is roughly centered (on a straight line).
-  if (abs(pos) < 10) { // threshold value can be adjusted
+  
+  // Only update dynamic line type if the robot is roughly centered (on a straight line)
+  if (abs(pos) < 10) {
     dynamicUpdateLineType();
   }
   
